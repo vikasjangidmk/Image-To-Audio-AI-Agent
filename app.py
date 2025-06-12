@@ -7,8 +7,61 @@ import tempfile
 import requests
 from mistralai import Mistral
 from pathlib import Path
+from langchain_community.llms import OpenAI
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts import PromptTemplate
+from langchain.chains import LLMChain
+from gtts import gTTS
 
 st.set_page_config(layout="wide", page_title="OCR & Audio App", page_icon="🔊")
+
+# Theme selection
+theme = st.selectbox("Choose Theme", ["Light", "Dark"], index=0)
+
+# Apply theme using inline CSS
+if theme == "Dark":
+    st.markdown(
+        """
+        <style>
+            body {
+                background-color: #0e1117;
+                color: white;
+            }
+            .stTextInput > div > input, .stTextArea textarea {
+                background-color: #262730;
+                color: white;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+elif theme == "Light":
+    st.markdown(
+        """
+        <style>
+            body {
+                background-color: #ffffff;
+                color: black;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+# Offline OCR Fallback (using pytesseract)
+try:
+    import pytesseract
+    from PIL import Image
+except ImportError:
+    pytesseract = None
+
+# Offline TTS Fallback (using gTTS)    
+try:
+    from gtts import gTTS
+except ImportError:
+    gTTS = None
+
 
 # Create tabs for different functions - removed the Write Text tab
 tab1, tab2 = st.tabs(["OCR Text Extraction", "Text to Audio Conversion"])
@@ -43,6 +96,9 @@ with tab1:
     if not api_key:
         st.info("Please enter your API key to continue.")
         st.stop()
+    
+    # 2 OPEN AI API Key Input
+    openai_api_key = st.text_input("Enter your OpenAI API Key (for summarization)", type="password", key="openai_key_summary")
 
     # Initialize session state variables for persistence
     if "ocr_result" not in st.session_state:
@@ -132,7 +188,15 @@ with tab1:
                         pages = ocr_response.pages if hasattr(ocr_response, "pages") else (ocr_response if isinstance(ocr_response, list) else [])
                         result_text = "\n\n".join(page.markdown for page in pages) or "No result found."
                     except Exception as e:
-                        result_text = f"Error extracting result: {e}"
+                        if pytesseract and file_type == "Image" and source_type == "Local Upload":
+                            st.warning("Mistral OCR failed. Using fallback OCR (pytesseract)...")
+                            try:
+                                image = Image.open(source)
+                                result_text = pytesseract.image_to_string(image)
+                            except Exception as fallback_err:
+                                result_text = f"Fallback OCR failed: {fallback_err}"
+                        else:
+                            result_text = f"Error extracting result: {e}"
                     
                     st.session_state["ocr_result"].append(result_text)
                     st.session_state["preview_src"].append(preview_src)
@@ -167,6 +231,47 @@ with tab1:
                     height=300,
                     key=f"result_text_{idx}"
                 )
+                
+                # LangChain-based Summarization
+                if st.button(f"Summarize Text", key=f"summarize_{idx}"):
+                    if not openai_api_key:
+                        st.error("Please enter your OpenAI API Key.")
+                    else:
+                        try:
+                            llm = ChatOpenAI(openai_api_key=openai_api_key, model="gpt-3.5-turbo", temperature=0)
+                            prompt = PromptTemplate(
+                                template="Summarize the following content:\n\n{text}", 
+                                input_variables=["text"]
+                            )
+                            chain = LLMChain(llm=llm, prompt=prompt)
+                            summary = chain.run({"text": edited_text})
+                            st.success("📌 Summary:")
+                            st.markdown(summary)
+                        except Exception as ex:
+                            st.error(f"Failed to summarize: {ex}")
+                            
+                # LangChain-based Question Answering
+                st.markdown("### Ask a Question based on the above text")
+                question = st.text_input(f"Enter your question for Result {idx+1}:", key=f"qna_input_{idx}")
+                
+                if st.button(f"Get Answer", key=f"qna_btn_{idx}"):
+                    if not openai_api_key:
+                        st.error("Please enter your OpenAI API Key.")
+                    elif not question:
+                        st.warning("Please enter a question.")
+                    else:
+                        try:
+                            llm = ChatOpenAI(openai_api_key=openai_api_key, model="gpt-3.5-turbo", temperature=0)
+                            prompt = PromptTemplate(
+                                template="Given the following context:\n\n{text}\n\nAnswer this question:\n\n{question}",
+                                input_variables=["text", "question"]
+                            )
+                            chain = LLMChain(llm=llm, prompt=prompt)
+                            answer = chain.run({"text": edited_text, "question": question})
+                            st.success("🧠 Answer:")
+                            st.markdown(answer)
+                        except Exception as e:
+                            st.error(f"Q&A failed: {e}")
                 
                 # Update the session state with any edits
                 st.session_state["ocr_result"][idx] = edited_text
@@ -363,7 +468,20 @@ with tab2:
                 
                 return True, temp_file_path, response.content
             else:
-                return False, f"API Error: {response.status_code}, {response.text}", None
+                # Fallback to gTTS if available
+                if gTTS:
+                    try:
+                        st.warning("OpenAI TTS failed. Using fallback gTTS...")
+                        gtts_obj = gTTS(text=text, lang='en')
+                        temp_file_path = os.path.join(tempfile.gettempdir(), "output_fallback.mp3")
+                        gtts_obj.save(temp_file_path)
+                        with open(temp_file_path, "rb") as f:
+                            audio_content = f.read()
+                            return True, temp_file_path, audio_content
+                    except Exception as fallback_err:
+                        return False, f"gTTS fallback failed: {fallback_err}", None
+                else:
+                    return False, f"OpenAI TTS failed: {response.status_code} - {response.text}", None
         
         except Exception as e:
             return False, f"Error: {str(e)}", None

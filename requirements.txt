@@ -2,8 +2,12 @@ streamlit
 mistralai
 
 
-langchain==0.3.13
-langchain-core==0.3.28
-langchain-community==0.3.13
-langchain-openai==0.2.14
+langchain
+langchain-core
+langchain-community
+langchain-openai
 
+# For Custom Work
+pytesseract
+Pillow
+gTTS
