@@ -29,3 +29,10 @@ An intelligent web application that extracts text from images and PDFs using **M
 | TTS             | OpenAI + `gTTS` fallback  |
 | OCR Fallback    | `pytesseract` + `Pillow`  |
 | Model           | `gpt-3.5-turbo` (via `ChatOpenAI`) |
+
+## 🧪 Sample Use Cases
+
+- Extract scanned text from academic PDFs and summarize it
+- Generate voice responses from long documents
+- Ask questions on extracted text like a mini ChatGPT
+- Use without internet via offline OCR and TTS fallback.
